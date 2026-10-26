@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+import time
 
 from twitchAPI.chat import Chat, ChatMessage, EventData
 from twitchAPI.oauth import UserAuthenticator
@@ -11,6 +12,7 @@ from twitchAPI.twitch import Twitch
 
 from canvas import Canvas
 from config import Settings
+from theme import ThemeStore
 
 
 OAUTH_REDIRECT_URL = "http://localhost:17563"
@@ -34,7 +36,13 @@ def parse_pixel_command(message: str) -> tuple[int, int, str] | None:
     return x, y, color
 
 
-async def run_bot(settings: Settings, canvas: Canvas) -> None:
+async def run_bot(
+    settings: Settings,
+    canvas: Canvas,
+    theme_store: ThemeStore,
+    on_pixel=None,
+    on_theme=None,
+) -> None:
     twitch = await Twitch(settings.client_id, settings.client_secret)
     chat = None
     try:
@@ -46,19 +54,39 @@ async def run_bot(settings: Settings, canvas: Canvas) -> None:
             access_token, CHAT_SCOPES, refresh_token
         )
         chat = await Chat(twitch)
+        last_pixel_at: dict[str, float] = {}
 
         async def on_ready(event: EventData) -> None:
             print(f"Connected to Twitch chat; joining #{settings.channel}.")
             await event.chat.join_room(settings.channel)
 
         async def on_message(message: ChatMessage) -> None:
+            theme_match = re.match(r"^!theme(?:\s+(.*))?$", message.text.strip(), re.IGNORECASE)
+            if theme_match is not None:
+                if message.user.name.casefold() != settings.channel.casefold():
+                    return
+                theme = (theme_match.group(1) or "").strip()
+                theme_store.set(theme)
+                print(f"Theme updated: {theme or '(cleared)'}")
+                if on_theme is not None:
+                    await on_theme(theme)
+                return
+
             parsed = parse_pixel_command(message.text)
             if parsed is None:
+                return
+            user_key = str(getattr(message.user, "id", "") or message.user.name).casefold()
+            now = time.monotonic()
+            previous = last_pixel_at.get(user_key)
+            if previous is not None and now - previous < settings.pixel_cooldown_seconds:
                 return
             x, y, color = parsed
             record = canvas.place_pixel(message.user.name, x, y, color)
             if record is not None:
+                last_pixel_at[user_key] = now
                 print(json_record(record))
+                if on_pixel is not None:
+                    await on_pixel(record)
 
         chat.register_event(ChatEvent.READY, on_ready)
         chat.register_event(ChatEvent.MESSAGE, on_message)

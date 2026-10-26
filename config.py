@@ -11,6 +11,7 @@ class Settings:
     client_id: str
     client_secret: str
     channel: str
+    pixel_cooldown_seconds: float = 5.0
 
 
 def load_settings() -> Settings:
@@ -25,8 +26,15 @@ def load_settings() -> Settings:
         raise RuntimeError(
             "Missing required .env setting(s): " + ", ".join(missing)
         )
+    try:
+        cooldown = float(os.getenv("PIXEL_COOLDOWN_SECONDS", "5"))
+    except ValueError as error:
+        raise RuntimeError("PIXEL_COOLDOWN_SECONDS must be a number") from error
+    if cooldown < 0:
+        raise RuntimeError("PIXEL_COOLDOWN_SECONDS must be zero or greater")
     return Settings(
         client_id=required["TWITCH_CLIENT_ID"],
         client_secret=required["TWITCH_CLIENT_SECRET"],
         channel=required["TWITCH_CHANNEL"].lstrip("#").strip(),
+        pixel_cooldown_seconds=cooldown,
     )
